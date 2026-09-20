@@ -119,15 +119,22 @@ function seedCourses(semId, weeks, nPer) {
   });
 }
 
+function applySemSeed(s) {
+  const sd = window.SEED && window.SEED.semester;
+  if (!sd) return;
+  if (sd.name) s.name = sd.name;
+  if (sd.start) s.start = sd.start;
+  if (sd.weeks) s.weeks = clamp(+sd.weeks, 1, 40);
+  if (sd.days) s.days = clamp(+sd.days, 1, 7);
+  if (Array.isArray(sd.periods) && sd.periods.length) {
+    const ps = sd.periods.map((p) => String(p).split('-')).filter((x) => x.length === 2 && x[0]);
+    if (ps.length) s.periods = ps.map(([a, b]) => ({ s: a.trim(), e: b.trim() }));
+  }
+}
+
 function freshState() {
   const sem = newSemester();
-  const sd = window.SEED && window.SEED.semester;
-  if (sd) {
-    if (sd.name) sem.name = sd.name;
-    if (sd.start) sem.start = sd.start;
-    if (sd.weeks) sem.weeks = clamp(+sd.weeks, 1, 40);
-    if (sd.days) sem.days = clamp(+sd.days, 1, 7);
-  }
+  applySemSeed(sem);
   return {
     v: 1, semesters: [sem], activeSem: sem.id,
     courses: seedCourses(sem.id, sem.weeks, sem.periods.length),
@@ -340,6 +347,41 @@ function renderToday() {
         <div class="t-meta">${periodTime(s, c.start).s}–${periodTime(s, c.end).e}${c.loc ? ' · ' + esc(c.loc) : ''}${c.teacher ? ' · ' + esc(c.teacher) : ''}</div>
       </div></div>`;
   }).join('') : `<div class="empty">${w ? `${wd} 第 ${w} 周没有课` : '下一节：' + nextDayWithCourse()}</div>`;
+  renderTomorrowTip();
+}
+const EARLY_MIN = 8 * 60 + 30;
+function tomorrowInfo() {
+  const s = sem();
+  const d = addDays(new Date(), 1);
+  const w = semWeek(d);
+  if (!w) return null;
+  const day = (d.getDay() + 6) % 7 + 1;
+  if (day > (s.days || 5)) return null;
+  const items = coursesInWeek(w).filter((c) => c.day === day)
+    .map((c) => ({ c, from: toMin(periodTime(s, c.start).s) }))
+    .sort((a, b) => a.from - b.from);
+  return { s, d, w, day, items, first: items[0] || null };
+}
+function renderTomorrowTip() {
+  const el = $('#tomorrow-tip');
+  const t = tomorrowInfo();
+  if (!t) { el.hidden = true; el.innerHTML = ''; return; }
+  const label = `${fmtMD(t.d)} ${DAY_NAMES[t.day - 1]}`;
+  let cls = 'tomorrow-tip', head, sub;
+  if (!t.first) {
+    cls += ' ok';
+    head = '明天不用早起';
+    sub = `${label} 没有课`;
+  } else {
+    const f = t.first;
+    const who = [f.c.loc, f.c.teacher].filter(Boolean).map(esc).join(' · ');
+    head = (f.from <= EARLY_MIN ? '明天有早八 ' : '明天第一节 ') + periodTime(t.s, f.c.start).s;
+    sub = `${label} · ${esc(f.c.name)}${who ? ' · ' + who : ''} · 共 ${t.items.length} 节`;
+    if (f.from <= EARLY_MIN) cls += ' warn';
+  }
+  el.className = cls;
+  el.innerHTML = `<b>${head}</b><span>${sub}</span>`;
+  el.hidden = false;
 }
 function nextDayWithCourse() {
   const s = sem();
@@ -664,13 +706,7 @@ async function copyBackup() {
 
 function applySeed() {
   const s = sem();
-  const sd = window.SEED && window.SEED.semester;
-  if (sd) {
-    if (sd.name) s.name = sd.name;
-    if (sd.start) s.start = sd.start;
-    if (sd.weeks) s.weeks = clamp(+sd.weeks, 1, 40);
-    if (sd.days) s.days = clamp(+sd.days, 1, 7);
-  }
+  applySemSeed(s);
   const list = seedCourses(s.id, s.weeks, s.periods.length);
   if (!list.length) return toast('seed.js 里没有课程数据');
   const had = coursesOf(s.id).length;
