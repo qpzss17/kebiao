@@ -261,3 +261,30 @@ h1, h2 { margin: 0; font-weight: 700; }
   border-radius: 999px; font-size: 13.5px; text-align: center; pointer-events: none;
 }
 :root[data-theme="dark"] .toast { background: rgba(238, 241, 248, .92); color: #12141a; }
+
+/* ---------- 电脑 / 宽屏 ---------- */
+@media (min-width: 860px) {
+  body { padding-bottom: 72px; }
+  .appbar-top, .tabs { max-width: 1220px; margin: 0 auto; }
+  .appbar-top { padding: 12px 22px 8px; }
+  .appbar-top h1 { font-size: 20px; }
+  .view { max-width: 1220px; margin: 0 auto; padding: 20px 22px 0; }
+  #view-today, #view-manage { max-width: 880px; }
+  #view-week .weekbar, #view-week .weekbar-sub { max-width: 640px; margin: 0 auto; }
+  .g-time { font-size: 11px; }
+  .block { font-size: 13px; padding: 7px 9px; }
+  .block b { font-size: 13.5px; }
+  .block span { font-size: 12px; }
+  .block:hover { filter: brightness(1.08); box-shadow: 0 3px 12px rgba(0, 0, 0, .22); z-index: 2; }
+  .t-item:hover, .wide-btn:hover, .mini:hover, .chip-btn:hover, .icon-btn:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  }
+  #per-list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 22px; }
+  .sheet { align-items: center; justify-content: center; padding: 26px; }
+  .sheet-panel {
+    width: 100%; max-width: 680px; max-height: 84vh; border-radius: 18px;
+    box-shadow: 0 20px 54px rgba(0, 0, 0, .34); animation: pop .18s ease-out;
+  }
+  @keyframes pop { from { transform: scale(.97); opacity: .5; } }
+  .toast { bottom: 34px; }
+}

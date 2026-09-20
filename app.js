@@ -442,8 +442,11 @@ function renderManage() {
   $('#data-seed').hidden = !seedN;
 
   const hint = $('#install-hint');
+  const isDesktop = !/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
     hint.textContent = '已作为独立应用运行。更新内容只需重新打开本页。';
+  } else if (isDesktop) {
+    hint.innerHTML = '用 <b>Edge</b> 或 <b>Chrome</b> 打开本页面 → 地址栏右侧点 <b>…</b>（Edge 是 <b>… › 应用</b>）→ <b>安装此站点为应用</b> / <b>将页面安装为应用</b>，即可得到桌面图标和独立窗口。<br>提示：必须通过 https 地址访问（如 GitHub Pages），不能用本地文件路径。';
   } else {
     hint.innerHTML = '用 iPhone 的 <b>Safari</b> 打开本页面 → 点底部 <b>分享</b> 按钮 → <b>添加到主屏幕</b>，即可从桌面全屏启动。<br>提示：必须通过 https 地址访问（如 GitHub Pages），不能用本地文件路径。';
   }
@@ -580,6 +583,9 @@ function bind() {
   $('#fab').onclick = () => openSheet(null);
   $('#sheet-form').addEventListener('submit', saveSheet);
   $$('[data-close]').forEach((el) => el.addEventListener('click', closeSheet));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet();
+  });
   $('#f-colors').addEventListener('click', (e) => {
     const b = e.target.closest('.swatch');
     if (!b) return;
