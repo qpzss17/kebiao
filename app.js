@@ -2,6 +2,7 @@
 'use strict';
 
 const KEY = 'kebiao.v1';
+const BUILD = '2026-09-20b';
 const RH = 52;
 const TIME_COL = 34;
 const DAY_MIN_W = 58;
@@ -191,6 +192,7 @@ function semWeek(d = new Date()) {
 function weekStartDate(s, w) { return addDays(mondayOf(parseYmd(s.start)), (w - 1) * 7); }
 function inWeek(c, w) {
   if (Array.isArray(c.wList) && c.wList.length) return c.wList.indexOf(w) !== -1;
+  if (c.wl) return parseWl(c.wl, 60).indexOf(w) !== -1;
   if (c.wFrom) return w >= c.wFrom && w <= (c.wTo || c.wFrom);
   return true;
 }
@@ -451,6 +453,7 @@ function renderManage() {
 
   const seedN = (window.SEED && Array.isArray(window.SEED.courses) ? window.SEED.courses : []).filter((c) => c && c.name).length;
   $('#data-seed').hidden = !seedN;
+  $('#build-tag').textContent = `本机代码版本 ${BUILD} · 当前学期 ${list.length} 门课 · 全部学期共 ${state.courses.length} 门`;
 
   const hint = $('#install-hint');
   const isDesktop = !/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -727,7 +730,7 @@ function applySeed() {
   const list = seedCourses(s.id, s.weeks, s.periods.length);
   if (!list.length) return toast('seed.js 里没有课程数据');
   const had = coursesOf(s.id).length;
-  if (!confirm(`注意：这是整表替换，你在手机上手动改过的内容会丢失（可先点「复制备份」留存）。\n\n用预设的 ${list.length} 门课替换当前学期的 ${had} 门课？`)) return;
+  if (!confirm(`用预设的 ${list.length} 门课替换当前学期的 ${had} 门课？`)) return;
   state.courses = state.courses.filter((c) => c.sem !== s.id).concat(list);
   save(); renderAll();
   toast(`已载入 ${list.length} 门课`);
@@ -800,3 +803,9 @@ bind();
 renderAll();
 if (autoSeeded) toast(`已自动载入预设课表（${autoSeeded} 门课）`);
 registerSW();
+
+/* 开机自启时网络往往还没就绪，Service Worker 只能端出缓存里的旧代码；等网络恢复自动刷一次 */
+if (!navigator.onLine) {
+  toast('当前离线，显示的是缓存版本，联网后会自动刷新');
+  window.addEventListener('online', () => location.reload());
+}
