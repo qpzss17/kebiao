@@ -29,6 +29,59 @@ function toMin(t) { const [h, m] = String(t || '0:0').split(':').map(Number); re
 function fmtMD(d) { return `${d.getMonth() + 1}月${d.getDate()}日`; }
 function hm(mins) { const m = Math.max(0, Math.round(mins)); if (m < 60) return `${m} 分钟`; return `${Math.floor(m / 60)} 小时 ${m % 60 ? (m % 60) + ' 分' : ''}`.trim(); }
 
+/* ---------- 周次表达式 ---------- */
+// 「3」「6-9」「5-7单」「8-16(双)」逗号/顿号分隔，展开成周次数组
+function parseWl(str, maxW) {
+  const max = clamp(+maxW || 30, 1, 60);
+  const set = new Set();
+  String(str == null ? '' : str).split(/[,，、;；\s]+/).forEach((raw) => {
+    let tok = raw.replace(/[本次周]/g, '').trim();
+    if (!tok) return;
+    let odd = null;
+    const pm = tok.match(/[（(]?(单|双)[)）]?$/);
+    if (pm) { odd = pm[1] === '单'; tok = tok.slice(0, pm.index); }
+    const rm = tok.match(/^(\d+)(?:\s*[-~—]\s*(\d+))?$/);
+    if (!rm) return;
+    const a = clamp(+rm[1], 1, max);
+    const b = clamp(+(rm[2] || rm[1]), 1, max);
+    for (let w = Math.min(a, b); w <= Math.max(a, b); w++) {
+      if (odd === null || (w % 2 === 1) === odd) set.add(w);
+    }
+  });
+  return [...set].sort((x, y) => x - y);
+}
+function fmtWl(list) {
+  const a = [...new Set((list || []).map(Number).filter((n) => n >= 1))].sort((x, y) => x - y);
+  const out = [];
+  let s = a[0], p = a[0];
+  for (let i = 1; i <= a.length; i++) {
+    if (a[i] === p + 1) { p = a[i]; continue; }
+    out.push(s === p ? `${s}` : `${s}-${p}`);
+    s = p = a[i];
+  }
+  return out.join(',');
+}
+// 就地把手工数据统一成 wl + wList（导入的旧备份只有 wFrom/wTo/parity）
+function normWeeks(c, maxW) {
+  const max = clamp(+maxW || 30, 1, 60);
+  let list = Array.isArray(c.wList) && c.wList.length ? c.wList.map(Number) : null;
+  if (!list && c.wl) list = parseWl(c.wl, max);
+  if (!list && c.wFrom) {
+    const from = clamp(+c.wFrom, 1, max), to = clamp(+c.wTo || c.wFrom, from, max);
+    list = [];
+    for (let w = from; w <= to; w++) {
+      if (c.parity === 'odd' && w % 2 === 0) continue;
+      if (c.parity === 'even' && w % 2 === 1) continue;
+      list.push(w);
+    }
+  }
+  c.wList = (list || []).filter((w) => w >= 1 && w <= max);
+  if (!c.wList.length) c.wList = Array.from({ length: max }, (_, i) => i + 1);
+  c.wl = fmtWl(c.wList);
+  delete c.wFrom; delete c.wTo; delete c.parity;
+  return c;
+}
+
 /* ---------- 数据 ---------- */
 let state = null;
 let view = 'week';
@@ -46,9 +99,40 @@ function newSemester() {
   };
 }
 
+function seedCourses(semId, weeks, nPer) {
+  const list = window.SEED && window.SEED.courses;
+  if (!Array.isArray(list)) return [];
+  const maxPer = clamp(+nPer || 12, 1, 40);
+  return list.filter((c) => c && c.name).map((c) => {
+    const start = clamp(+c.start || 1, 1, maxPer);
+    const end = Math.max(start, clamp(+c.end || c.start || 1, 1, maxPer));
+    const out = {
+      id: uid(), sem: semId,
+      name: String(c.name).slice(0, 24),
+      teacher: String(c.teacher || '').slice(0, 16),
+      loc: String(c.loc || '').slice(0, 24),
+      day: clamp(+c.day || 1, 1, 7), start, end,
+      wl: c.wl, wList: c.wList, wFrom: c.wFrom, wTo: c.wTo, parity: c.parity,
+      color: c.color || COLORS[0],
+    };
+    return normWeeks(out, weeks);
+  });
+}
+
 function freshState() {
   const sem = newSemester();
-  return { v: 1, semesters: [sem], activeSem: sem.id, courses: [], ui: { theme: 'auto' } };
+  const sd = window.SEED && window.SEED.semester;
+  if (sd) {
+    if (sd.name) sem.name = sd.name;
+    if (sd.start) sem.start = sd.start;
+    if (sd.weeks) sem.weeks = clamp(+sd.weeks, 1, 40);
+    if (sd.days) sem.days = clamp(+sd.days, 1, 7);
+  }
+  return {
+    v: 1, semesters: [sem], activeSem: sem.id,
+    courses: seedCourses(sem.id, sem.weeks, sem.periods.length),
+    ui: { theme: 'auto' },
+  };
 }
 
 function load() {
@@ -58,6 +142,10 @@ function load() {
     const s = JSON.parse(raw);
     if (!s || !Array.isArray(s.semesters) || !s.semesters.length) return freshState();
     s.courses = Array.isArray(s.courses) ? s.courses : [];
+    s.courses.forEach((c) => {
+      const owner = s.semesters.find((x) => x.id === c.sem);
+      normWeeks(c, owner ? owner.weeks : 30);
+    });
     s.ui = s.ui || { theme: 'auto' };
     if (!s.semesters.some((x) => x.id === s.activeSem)) s.activeSem = s.semesters[0].id;
     return s;
@@ -84,9 +172,8 @@ function semWeek(d = new Date()) {
 }
 function weekStartDate(s, w) { return addDays(mondayOf(parseYmd(s.start)), (w - 1) * 7); }
 function inWeek(c, w) {
-  if (w < c.wFrom || w > c.wTo) return false;
-  if (c.parity === 'odd') return w % 2 === 1;
-  if (c.parity === 'even') return w % 2 === 0;
+  if (Array.isArray(c.wList) && c.wList.length) return c.wList.indexOf(w) !== -1;
+  if (c.wFrom) return w >= c.wFrom && w <= (c.wTo || c.wFrom);
   return true;
 }
 function coursesInWeek(w, s = sem()) { return coursesOf(s.id).filter((c) => inWeek(c, w)); }
@@ -304,10 +391,13 @@ function renderManage() {
   $('#course-list').innerHTML = list.length ? list.map((c) => `<div class="row" data-c="${c.id}">
       <span class="dot" style="background:${c.color || COLORS[0]}"></span>
       <div class="grow"><div>${esc(c.name)}</div>
-        <div class="sub">${DAY_NAMES[c.day - 1]} ${c.start}-${c.end}节 · 第${c.wFrom}-${c.wTo}周${c.parity === 'odd' ? ' 单周' : c.parity === 'even' ? ' 双周' : ''}${c.loc ? ' · ' + esc(c.loc) : ''}</div></div>
+        <div class="sub">${DAY_NAMES[c.day - 1]} ${c.start}-${c.end}节 · 第${esc(c.wl || '')}周${c.loc ? ' · ' + esc(c.loc) : ''}${c.day > (s.days || 5) ? ' · 超出上课天数，网格不显示' : ''}</div></div>
       <button class="mini c-edit" type="button">编辑</button>
       <button class="mini c-del danger" type="button">删除</button>
     </div>`).join('') : '<p class="hint" style="margin:0">当前学期还没有课程。</p>';
+
+  const seedN = (window.SEED && Array.isArray(window.SEED.courses) ? window.SEED.courses : []).filter((c) => c && c.name).length;
+  $('#data-seed').hidden = !seedN;
 
   const hint = $('#install-hint');
   if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
@@ -358,7 +448,7 @@ function openSheet(src) {
   const s = sem();
   const isNew = !src?.id;
   editing = isNew ? null : src;
-  const c = src || { name: '', teacher: '', loc: '', day: 1, start: 1, end: 1, wFrom: semWeek() ?? 1, wTo: s.weeks, parity: 'all', color: COLORS[0] };
+  const c = src || { name: '', teacher: '', loc: '', day: 1, start: 1, end: 1, wl: `1-${s.weeks}`, color: COLORS[0] };
   $('#sheet-title').textContent = isNew ? '添加课程' : '编辑课程';
   $('#f-name').value = c.name || '';
   $('#f-teacher').value = c.teacher || '';
@@ -367,9 +457,7 @@ function openSheet(src) {
   const opts = (v) => s.periods.map((_, i) => `<option value="${i + 1}"${v === i + 1 ? ' selected' : ''}>第 ${i + 1} 节 ${esc(s.periods[i].s)}</option>`).join('');
   $('#f-start').innerHTML = opts(c.start);
   $('#f-end').innerHTML = opts(c.end);
-  $('#f-wfrom').value = c.wFrom || 1;
-  $('#f-wto').value = c.wTo || s.weeks;
-  $('#f-parity').value = c.parity || 'all';
+  $('#f-wl').value = c.wl || fmtWl(c.wList) || '1-' + s.weeks;
   $('#f-colors').innerHTML = COLORS.map((x) => `<button type="button" class="swatch${(c.color || COLORS[0]) === x ? ' on' : ''}" data-color="${x}" style="background:${x}"></button>`).join('');
   $('#f-delete').hidden = isNew;
   $('#sheet').hidden = false;
@@ -385,17 +473,18 @@ function saveSheet(e) {
   if (!name) return toast('请填写课程名称');
   let start = +$('#f-start').value, end = +$('#f-end').value;
   if (start > end) [start, end] = [end, start];
-  const wFrom = clamp(+$('#f-wfrom').value || 1, 1, s.weeks);
-  const wTo = clamp(+$('#f-wto').value || s.weeks, wFrom, s.weeks);
+  const wlRaw = $('#f-wl').value.trim();
+  const wList = parseWl(wlRaw || `1-${s.weeks}`, s.weeks);
+  if (!wList.length) return toast('周次没看懂，可填 1-16 或 3,6-9');
   const picked = $('.swatch.on')?.dataset.color || COLORS[0];
-  const data = {
+  const data = normWeeks({
     sem: s.id, name,
     teacher: $('#f-teacher').value.trim(),
     loc: $('#f-loc').value.trim(),
-    day: +$('#f-day').value, start, end, wFrom, wTo,
-    parity: $('#f-parity').value,
+    day: +$('#f-day').value, start, end,
+    wl: wlRaw, wList,
     color: picked,
-  };
+  }, s.weeks);
   const wasEdit = !!editing;
   if (editing) Object.assign(editing, data);
   else state.courses.push({ id: uid(), ...data });
@@ -416,7 +505,7 @@ function loadSample() {
     ['离散数学', '孙老师', '三教 502', 5, 1, 2, COLORS[1]],
   ];
   rows.forEach(([name, teacher, loc, day, start, end, color]) => {
-    state.courses.push({ id: uid(), sem: s.id, name, teacher, loc, day, start, end, wFrom: 1, wTo: s.weeks, parity: 'all', color });
+    state.courses.push(normWeeks({ id: uid(), sem: s.id, name, teacher, loc, day, start, end, wl: `1-${s.weeks}`, color }, s.weeks));
   });
   save();
   renderAll();
@@ -549,6 +638,8 @@ function bind() {
   });
 
   $('#data-export').onclick = exportData;
+  $('#data-copy').onclick = copyBackup;
+  $('#data-seed').onclick = applySeed;
   $('#data-import').onclick = () => $('#file-input').click();
   $('#file-input').addEventListener('change', importData);
   $('#data-sample').onclick = loadSample;
@@ -558,6 +649,28 @@ function bind() {
     shownWeek = null;
     save(); renderAll(); toast('已清空');
   };
+}
+
+async function copyBackup() {
+  const text = JSON.stringify(state);
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('备份已复制，去备忘录粘贴即可');
+  } catch (e) {
+    toast('剪贴板不可用，改用文件导出');
+    exportData();
+  }
+}
+
+function applySeed() {
+  const s = sem();
+  const list = seedCourses(s.id, s.weeks, s.periods.length);
+  if (!list.length) return toast('seed.js 里没有课程数据');
+  const had = coursesOf(s.id).length;
+  if (!confirm(`用预设的 ${list.length} 门课替换当前学期的 ${had} 门课？`)) return;
+  state.courses = state.courses.filter((c) => c.sem !== s.id).concat(list);
+  save(); renderAll();
+  toast(`已载入 ${list.length} 门课`);
 }
 
 async function exportData() {
@@ -587,6 +700,10 @@ function importData(e) {
       if (!Array.isArray(data.semesters) || !data.semesters.length) throw new Error('格式不符');
       data.semesters.forEach((s) => { s.id = s.id || uid(); s.periods = Array.isArray(s.periods) && s.periods.length ? s.periods : DEFAULT_PERIODS.map(([a, b]) => ({ s: a, e: b })); s.days = s.days || 5; s.weeks = s.weeks || 20; });
       data.courses = (data.courses || []).filter((c) => data.semesters.some((s) => s.id === c.sem));
+      data.courses.forEach((c) => {
+        const owner = data.semesters.find((s) => s.id === c.sem);
+        normWeeks(c, owner ? owner.weeks : 30);
+      });
       data.ui = data.ui || { theme: 'auto' };
       if (!data.semesters.some((s) => s.id === data.activeSem)) data.activeSem = data.semesters[0].id;
       state = data;
