@@ -142,6 +142,17 @@ function freshState() {
   };
 }
 
+/* 浏览器里存着早期版本的空学期时，freshState 不会被调用，课表就一直是空的；这里自动补种 */
+function autoSeedActive(s) {
+  const act = s.semesters.find((x) => x.id === s.activeSem);
+  const preset = window.SEED && Array.isArray(window.SEED.courses) ? window.SEED.courses.filter((c) => c && c.name) : [];
+  if (!act || !preset.length || s.semesters.length > 1 || s.courses.some((c) => c.sem === act.id)) return 0;
+  applySemSeed(act);
+  const added = seedCourses(act.id, act.weeks, act.periods.length);
+  added.forEach((c) => s.courses.push(c));
+  return added.length;
+}
+
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
@@ -782,8 +793,10 @@ setInterval(() => {
 }, 15000);
 
 state = load();
-if (!localStorage.getItem(KEY)) save();
+const autoSeeded = autoSeedActive(state);
+if (!localStorage.getItem(KEY) || autoSeeded) save();
 shownWeek = semWeek() ?? 1;
 bind();
 renderAll();
+if (autoSeeded) toast(`已自动载入预设课表（${autoSeeded} 门课）`);
 registerSW();
