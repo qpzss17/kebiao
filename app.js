@@ -664,6 +664,13 @@ async function copyBackup() {
 
 function applySeed() {
   const s = sem();
+  const sd = window.SEED && window.SEED.semester;
+  if (sd) {
+    if (sd.name) s.name = sd.name;
+    if (sd.start) s.start = sd.start;
+    if (sd.weeks) s.weeks = clamp(+sd.weeks, 1, 40);
+    if (sd.days) s.days = clamp(+sd.days, 1, 7);
+  }
   const list = seedCourses(s.id, s.weeks, s.periods.length);
   if (!list.length) return toast('seed.js 里没有课程数据');
   const had = coursesOf(s.id).length;
