@@ -1,0 +1,134 @@
+name: 早八提醒
+
+# 每晚北京时间 20:30 读 seed.js，判断明天第一节是不是 08:30 前上课，
+# 是就往 Bark 推一条通知。没配 BARK 这个 Secret 时任务会直接失败并提示。
+
+on:
+  schedule:
+    - cron: '30 12 * * *'
+  workflow_dispatch:
+    inputs:
+      today:
+        description: '把哪天当“今天”（填 YYYY-MM-DD，留空=真实今天）'
+        required: false
+        default: ''
+      force:
+        description: '不管有没有早八都发一条（用来测通知通不通）'
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查明天有没有早八
+        env:
+          BARK: ${{ secrets.BARK }}
+          TODAY: ${{ inputs.today }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          python - <<'PY'
+          import datetime as dt, os, re, sys, urllib.parse, urllib.request
+
+          raw = open('seed.js', encoding='utf-8').read()
+
+          def sfield(k):
+              m = re.search(k + r":\s*'([^']*)'", raw)
+              return m.group(1) if m else ''
+
+          def nfield(k, d=0):
+              m = re.search(k + r':\s*(\d+)', raw)
+              return int(m.group(1)) if m else d
+
+          anchor = dt.date.fromisoformat(sfield('start'))
+          weeks = nfield('weeks', 20)
+          days = nfield('days', 5)
+          block = raw.split('periods:', 1)[1].split(']', 1)[0] if 'periods:' in raw else ''
+          times = re.findall(r'(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', block)
+          if not times:
+              sys.exit('seed.js 里没找到 periods')
+
+          def mins(t):
+              h, m = t.split(':')
+              return int(h) * 60 + int(m)
+
+          def parse_wl(text, maxw):
+              out = set()
+              for tok in re.split(r'[,，、;；\s]+', text or ''):
+                  tok = tok.replace('周', '').replace('次', '').strip()
+                  if not tok:
+                      continue
+                  odd = None
+                  pm = re.search(r'[（(]?(单|双)[)）]?$', tok)
+                  if pm:
+                      odd = pm.group(1) == '单'
+                      tok = tok[:pm.start()]
+                  rm = re.match(r'^(\d+)(?:\s*[-~—]\s*(\d+))?$', tok)
+                  if not rm:
+                      continue
+                  a = max(1, min(int(rm.group(1)), maxw))
+                  b = max(1, min(int(rm.group(2) or rm.group(1)), maxw))
+                  for w in range(min(a, b), max(a, b) + 1):
+                      if odd is None or (w % 2 == 1) == odd:
+                          out.add(w)
+              return out
+
+          courses = []
+          for line in raw.splitlines():
+              t = line.strip()
+              if not t.startswith('{ name:'):
+                  continue
+              g = lambda k: re.search(k + r":\s*'([^']*)'", t)
+              n = lambda k, d=1: (lambda m: int(m.group(1)) if m else d)(re.search(k + r':\s*(\d+)', t))
+              courses.append({
+                  'name': g('name').group(1) if g('name') else '',
+                  'teacher': g('teacher').group(1) if g('teacher') else '',
+                  'loc': g('loc').group(1) if g('loc') else '',
+                  'day': n('day'), 'start': n('start'), 'end': n('end'),
+                  'weeks': parse_wl(g('wl').group(1) if g('wl') else '', weeks),
+              })
+          print('读到 %d 个课块，学期 %s 起，共 %d 周' % (len(courses), anchor, weeks))
+
+          today = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)).date()
+          if os.getenv('TODAY', '').strip():
+              today = dt.date.fromisoformat(os.environ['TODAY'].strip())
+          tmr = today + dt.timedelta(days=1)
+          wnum = (tmr - dt.timedelta(days=tmr.weekday()) - anchor).days // 7 + 1
+          wd = tmr.isoweekday()
+          CN = '一二三四五六日'
+
+          if not (1 <= wnum <= weeks) or wd > days:
+              print('明天 %s（第 %s 周）不在上课范围内，不发通知' % (tmr, wnum))
+              sys.exit(0)
+
+          todo = sorted((c for c in courses if c['day'] == wd and wnum in c['weeks']),
+                        key=lambda c: mins(times[c['start'] - 1][0]))
+          if not todo:
+              print('明天 %s 周%s 第 %d 周没有课，不发通知' % (tmr, CN[wd - 1], wnum))
+              sys.exit(0)
+
+          first = todo[0]
+          t0 = times[first['start'] - 1][0]
+          early = mins(t0) <= 8 * 60 + 30
+          title = ('明天有早八 ' if early else '明天第一节 ') + t0
+          body = '%s 周%s 第%d周 %s %s' % (
+              tmr.strftime('%m月%d日'), CN[wd - 1], wnum, first['name'],
+              ' '.join(x for x in (first['loc'], first['teacher']) if x))
+          print(title, '|', body)
+
+          if not early and not os.getenv('FORCE', '').strip().lower() in ('1', 'true'):
+              sys.exit(0)
+
+          key = os.getenv('BARK', '').strip()
+          if not key:
+              sys.exit('仓库还没设置 Secret「BARK」，无法推送。GitHub → Settings → Secrets and variables → Actions → New repository secret')
+          base = key if key.startswith('http') else 'https://api.day.app/' + key
+          url = '%s/%s/%s?%s' % (base.rstrip('/'), urllib.parse.quote(title), urllib.parse.quote(body),
+                                 urllib.parse.urlencode({'group': 'kebiao', 'sound': 'bell', 'badge': '1', 'interruption-level': 'time-sensitive'}))
+          with urllib.request.urlopen(url, timeout=20) as r:
+              print('Bark 返回', r.status, r.read(200).decode('utf-8', 'replace'))
+          PY
