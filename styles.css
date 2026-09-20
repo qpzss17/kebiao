@@ -52,11 +52,12 @@ h1, h2 { margin: 0; font-weight: 700; }
   border-bottom: 1px solid var(--line);
 }
 .appbar-top { display: flex; align-items: center; gap: 10px; padding: 10px 14px 6px; }
-.appbar-top h1 { font-size: 19px; flex: 1; }
+.appbar-top h1 { font-size: 19px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .appbar-actions { display: flex; align-items: center; gap: 8px; }
 .icon-btn {
   width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface-2); cursor: pointer; font-size: 15px; line-height: 1;
+  background: var(--surface-2); cursor: pointer; font-size: 15px;
+  display: inline-flex; align-items: center; justify-content: center; line-height: 0;
 }
 .inline-select {
   max-width: 132px; border: 1px solid var(--line); border-radius: 10px;
@@ -84,7 +85,8 @@ h1, h2 { margin: 0; font-weight: 700; }
 .weekbar-mid span { font-size: 12px; }
 .chip-btn {
   width: 30px; height: 30px; border-radius: 9px; border: 1px solid var(--line);
-  background: var(--surface-2); cursor: pointer; font-size: 17px; line-height: 1;
+  background: var(--surface-2); cursor: pointer; font-size: 17px;
+  display: inline-flex; align-items: center; justify-content: center; line-height: 0;
 }
 .text-btn {
   border: 0; background: none; color: var(--accent); font-size: 13px; font-weight: 600;
@@ -204,7 +206,8 @@ h1, h2 { margin: 0; font-weight: 700; }
 }
 .fab {
   width: 54px; height: 54px; border-radius: 50%; border: 0; cursor: pointer;
-  background: var(--accent); color: #fff; font-size: 28px; line-height: 1;
+  background: var(--accent); color: #fff; font-size: 30px;
+  display: flex; align-items: center; justify-content: center; line-height: 0;
   box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .fab:active { transform: scale(.94); }
