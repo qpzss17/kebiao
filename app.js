@@ -674,7 +674,7 @@ function applySeed() {
   const list = seedCourses(s.id, s.weeks, s.periods.length);
   if (!list.length) return toast('seed.js 里没有课程数据');
   const had = coursesOf(s.id).length;
-  if (!confirm(`用预设的 ${list.length} 门课替换当前学期的 ${had} 门课？`)) return;
+  if (!confirm(`注意：这是整表替换，你在手机上手动改过的内容会丢失（可先点「复制备份」留存）。\n\n用预设的 ${list.length} 门课替换当前学期的 ${had} 门课？`)) return;
   state.courses = state.courses.filter((c) => c.sem !== s.id).concat(list);
   save(); renderAll();
   toast(`已载入 ${list.length} 门课`);
