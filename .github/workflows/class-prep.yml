@@ -1,0 +1,178 @@
+name: 上课前提醒
+
+# 每 10 分钟（北京时间 07:00–21:50）读一次 seed.js，
+# 如果 30 分钟内要上课，就往 Bark 推一条「还有几分钟、上什么、在哪上」。
+# 用 Actions 缓存记住今天已经推过哪几节，避免同一节课重复推送。
+
+on:
+  schedule:
+    - cron: '*/10 23,0-13 * * *'
+  workflow_dispatch:
+    inputs:
+      now:
+        description: '把哪个时刻当“现在”（填 YYYY-MM-DD HH:MM，北京时间，留空=真实时间）'
+        required: false
+        default: ''
+      force:
+        description: '不管离上课还有多久，把今天下一节推一条（用来测通知）'
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取北京时间日期
+        id: clk
+        run: echo "date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: 读今天的已推送记录
+        uses: actions/cache@v4
+        with:
+          path: .state
+          key: kebiao-prep-${{ steps.clk.outputs.date }}-${{ github.run_id }}
+          restore-keys: kebiao-prep-${{ steps.clk.outputs.date }}-
+
+      - name: 判断 30 分钟内要不要上课
+        env:
+          BARK: ${{ secrets.BARK }}
+          NOW: ${{ inputs.now }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          python - <<'PY'
+          import datetime as dt, os, re, sys, urllib.parse, urllib.request
+
+          raw = open('seed.js', encoding='utf-8').read()
+
+          def sfield(k):
+              m = re.search(k + r":\s*'([^']*)'", raw)
+              return m.group(1) if m else ''
+
+          def nfield(k, d=0):
+              m = re.search(k + r':\s*(\d+)', raw)
+              return int(m.group(1)) if m else d
+
+          anchor = dt.date.fromisoformat(sfield('start'))
+          weeks = nfield('weeks', 20)
+          days = nfield('days', 5)
+          block = raw.split('periods:', 1)[1].split(']', 1)[0] if 'periods:' in raw else ''
+          times = re.findall(r'(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', block)
+          if not times:
+              sys.exit('seed.js 里没找到 periods')
+
+          def mins(t):
+              h, m = t.split(':')
+              return int(h) * 60 + int(m)
+
+          def parse_wl(text, maxw):
+              out = set()
+              for tok in re.split(r'[,，、;；\s]+', text or ''):
+                  tok = tok.replace('周', '').replace('次', '').strip()
+                  if not tok:
+                      continue
+                  odd = None
+                  pm = re.search(r'[（(]?(单|双)[)）]?$', tok)
+                  if pm:
+                      odd = pm.group(1) == '单'
+                      tok = tok[:pm.start()]
+                  rm = re.match(r'^(\d+)(?:\s*[-~—]\s*(\d+))?$', tok)
+                  if not rm:
+                      continue
+                  a = max(1, min(int(rm.group(1)), maxw))
+                  b = max(1, min(int(rm.group(2) or rm.group(1)), maxw))
+                  for w in range(min(a, b), max(a, b) + 1):
+                      if odd is None or (w % 2 == 1) == odd:
+                          out.add(w)
+              return out
+
+          courses = []
+          for line in raw.splitlines():
+              t = line.strip()
+              if not t.startswith('{ name:'):
+                  continue
+              g = lambda k: re.search(k + r":\s*'([^']*)'", t)
+              n = lambda k, d=1: (lambda m: int(m.group(1)) if m else d)(re.search(k + r':\s*(\d+)', t))
+              courses.append({
+                  'name': g('name').group(1) if g('name') else '',
+                  'teacher': g('teacher').group(1) if g('teacher') else '',
+                  'loc': g('loc').group(1) if g('loc') else '',
+                  'day': n('day'), 'start': n('start'), 'end': n('end'),
+                  'weeks': parse_wl(g('wl').group(1) if g('wl') else '', weeks),
+              })
+
+          now = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=8)
+          ov = os.getenv('NOW', '').strip()
+          if ov:
+              now = dt.datetime.strptime(ov, '%Y-%m-%d %H:%M')
+          today = now.date()
+          left_now = now.hour * 60 + now.minute
+          wnum = (today - dt.timedelta(days=today.weekday()) - anchor).days // 7 + 1
+          wd = today.isoweekday()
+          force = os.getenv('FORCE', '').strip().lower() in ('1', 'true')
+          print('北京时间 %s 第%d周 周%s' % (now, wnum, '一二三四五六日'[wd - 1]))
+
+          if not (1 <= wnum <= weeks) and not force:
+              print('不在教学周内（周末/假期），不发通知')
+              sys.exit(0)
+
+          STATE = os.path.join('.state', 'notified.txt')
+          os.makedirs('.state', exist_ok=True)
+          done = set()
+          if os.path.exists(STATE):
+              done = set(x.strip() for x in open(STATE, encoding='utf-8') if x.strip())
+          print('今天已推送 %d 条' % len(done))
+
+          todo = sorted((c for c in courses if c['day'] == wd and wnum in c['weeks']),
+                        key=lambda c: mins(times[c['start'] - 1][0]))
+
+          def span(c):
+              return str(c['start']) if c['start'] == c['end'] else '%d-%d' % (c['start'], c['end'])
+
+          hits = []
+          for c in todo:
+              key = '%s|%d|%d' % (today.isoformat(), c['day'], c['start'])
+              if key in done:
+                  continue
+              left = mins(times[c['start'] - 1][0]) - left_now
+              if 0 < left <= 30 or (force and left > 0 and not hits):
+                  hits.append((c, left, key))
+
+          if not hits:
+              if not force:
+                  print('30 分钟内没有要上的课，不发通知')
+                  open(STATE, 'a', encoding='utf-8').close()
+                  sys.exit(0)
+              hits = [(None, 0, 'test|%s' % now.strftime('%H%M'))]
+              print('今天没有待上的课了，force 模式改发一条测试')
+
+          key = os.getenv('BARK', '').strip()
+          if not key:
+              sys.exit('仓库还没设置 Secret「BARK」，无法推送。GitHub → Settings → Secrets and variables → Actions → New repository secret')
+          base = key if key.startswith('http') else 'https://api.day.app/' + key
+
+          for c, left, mark in hits:
+              if c is None:
+                  title = '课前提醒已就绪'
+                  body = '这是测试通知，以后上课前 30 分钟会推这里'
+              else:
+                  t0 = times[c['start'] - 1][0]
+                  title = '%s 上课（还有 %d 分钟）' % (t0, left)
+                  body = '%s 第%s节 %s %s' % (
+                      c['name'], span(c), c['loc'] or '教室待定', c['teacher'])
+              print(title, '|', body)
+              url = '%s/%s/%s?%s' % (base.rstrip('/'), urllib.parse.quote(title), urllib.parse.quote(body),
+                                     urllib.parse.urlencode({'group': 'kebiao', 'sound': 'bell', 'badge': '1',
+                                                            'interruption-level': 'time-sensitive'}))
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as r:
+                      print('Bark 返回', r.status, r.read(200).decode('utf-8', 'replace'))
+              except Exception as e:
+                  sys.exit('推送失败：%s' % e)
+              if c is not None:
+                  with open(STATE, 'a', encoding='utf-8') as f:
+                      f.write(mark + '\n')
+          PY
